@@ -36,6 +36,12 @@ public class UvcCheck {
         same(as.feed(b(2, 0x81, 'I', 'J'), 4), "EFGH");   // EOF 없이 FID 토글로 완성
         assert0(as.feed(b(2, 0xc1, 'K'), 3));             // ERR: IJ 프레임 버림
         if (as.errors != 1) throw new AssertionError("errors");
+        Uvc.Assembler sp = new Uvc.Assembler();                // 페이로드가 요청 버퍼보다 커서 나뉘어 온 경우
+        assert0(sp.feed(b(2, 0x80, 'z'), 3));
+        assert0(sp.feed(b(2, 0x81, 'P', 'Q'), 4));             // 꽉 찬 전송(요청 크기 4)
+        sp.feedContinuation(b(2, 0x81, 'S', 'T'), 4);           // 이어지는 조각: 헤더처럼 보여도 데이터다
+        if (!java.util.Arrays.equals(sp.feed(b(2, 0x82, 'U'), 3), b('P', 'Q', 2, 0x81, 'S', 'T')))
+            throw new AssertionError("continuation");                // 다음 페이로드에서 FID 토글로 완성
         if (!Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 0xff, 0xd9))) throw new AssertionError("jpeg ok");
         if (!Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 0xff, 0xd9, 0, 0))) throw new AssertionError("jpeg padded");
         if (Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 3, 4))) throw new AssertionError("jpeg truncated");
