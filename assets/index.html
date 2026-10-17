@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi Box KVM</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
+  #bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: #222; flex-wrap: wrap; }
+  #bar button, #bar select { background: #333; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 3px 8px; font: inherit; }
+  #bar .sp { flex: 1; }
+  #wrap { position: absolute; top: 34px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+  #screen { max-width: 100%; max-height: 100%; cursor: crosshair; user-select: none; -webkit-user-drag: none; outline: none; }
+  #screen:focus { box-shadow: 0 0 0 2px #3a7; }
+  #stat.ok { color: #6c6; } #stat.bad { color: #e66; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <select id="res" title="캡처 해상도">
+    <option value="11">640×480</option><option value="8">800×600</option><option value="7">1024×768</option>
+    <option value="6" selected>1280×720</option><option value="1">1920×1080</option>
+  </select>
+  <select id="fps" title="fps"><option>10</option><option>20</option><option selected>30</option><option>60</option></select>
+  <button id="cad">Ctrl+Alt+Del</button>
+  <button id="release">키 모두 떼기</button>
+  <span class="sp"></span>
+  <span id="info"></span>
+  <span id="stat" class="bad">연결 중</span>
+</div>
+<div id="wrap"><img id="screen" tabindex="0" alt="screen"></div>
+<script>
+// 화면은 MJPEG <img>, 입력은 WebSocket 바이너리: [1,mod,0,k1..k6] 키보드, [2,btn,xL,xH,yL,yH,wheel] 절대 마우스(0..4095)
+const img = document.getElementById('screen'), stat = document.getElementById('stat');
+let ws = null;
+
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { stat.textContent = '연결됨'; stat.className = 'ok'; refreshInfo(); };
+  ws.onclose = () => { stat.textContent = '끊김, 재연결 중'; stat.className = 'bad'; setTimeout(connect, 2000); };
+}
+function send(bytes) { if (ws && ws.readyState === 1) ws.send(new Uint8Array(bytes)); }
+
+function startStream() { img.src = '/stream.mjpeg?t=' + Date.now(); }
+img.onerror = () => setTimeout(startStream, 2000);
+
+async function refreshInfo() {
+  try {
+    const j = await (await fetch('/hid')).json();
+    document.getElementById('info').textContent = j.error ? 'HID: ' + j.error
+      : `HID ${j.chip} · 대상 ${j.targetConnected ? '연결' : '미연결'}${j.capsLock ? ' · Caps' : ''}${j.numLock ? ' · Num' : ''}`;
+  } catch (e) {}
+}
+setInterval(refreshInfo, 5000);
+
+// ---- 키보드 (USB HID usage) ----
+const MOD = { ControlLeft: 1, ShiftLeft: 2, AltLeft: 4, MetaLeft: 8, ControlRight: 16, ShiftRight: 32, AltRight: 64, MetaRight: 128 };
+const KEY = {};
+'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((c, i) => KEY['Key' + c] = 0x04 + i);
+'1234567890'.split('').forEach((c, i) => KEY['Digit' + c] = 0x1e + i);
+for (let i = 1; i <= 12; i++) KEY['F' + i] = 0x39 + i;
+'123456789'.split('').forEach((c, i) => KEY['Numpad' + c] = 0x59 + i);
+Object.assign(KEY, {
+  Enter: 0x28, Escape: 0x29, Backspace: 0x2a, Tab: 0x2b, Space: 0x2c, Minus: 0x2d, Equal: 0x2e,
+  BracketLeft: 0x2f, BracketRight: 0x30, Backslash: 0x31, Semicolon: 0x33, Quote: 0x34, Backquote: 0x35,
+  Comma: 0x36, Period: 0x37, Slash: 0x38, CapsLock: 0x39, PrintScreen: 0x46, ScrollLock: 0x47, Pause: 0x48,
+  Insert: 0x49, Home: 0x4a, PageUp: 0x4b, Delete: 0x4c, End: 0x4d, PageDown: 0x4e,
+  ArrowRight: 0x4f, ArrowLeft: 0x50, ArrowDown: 0x51, ArrowUp: 0x52, NumLock: 0x53,
+  NumpadDivide: 0x54, NumpadMultiply: 0x55, NumpadSubtract: 0x56, NumpadAdd: 0x57, NumpadEnter: 0x58,
+  Numpad0: 0x62, NumpadDecimal: 0x63, IntlBackslash: 0x64, ContextMenu: 0x65,
+  IntlRo: 0x87, IntlYen: 0x89, Lang1: 0x90, Lang2: 0x91,   // Lang1 = 한/영, Lang2 = 한자
+});
+let mods = 0;
+const down = [];
+function kbReport() { const r = [1, mods, 0, 0, 0, 0, 0, 0, 0]; down.slice(0, 6).forEach((k, i) => r[3 + i] = k); send(r); }
+function releaseAll() { mods = 0; down.length = 0; kbReport(); }
+
+function onKey(e, isDown) {
+  if (document.activeElement !== img) return;
+  e.preventDefault();
+  if (e.code in MOD) { mods = isDown ? mods | MOD[e.code] : mods & ~MOD[e.code]; kbReport(); return; }
+  const k = KEY[e.code];
+  if (k === undefined) return;
+  const i = down.indexOf(k);
+  if (isDown && i < 0) down.push(k);
+  if (!isDown && i >= 0) down.splice(i, 1);
+  kbReport();
+}
+document.addEventListener('keydown', e => onKey(e, true));
+document.addEventListener('keyup', e => onKey(e, false));
+window.addEventListener('blur', releaseAll);
+document.getElementById('release').onclick = () => { releaseAll(); img.focus(); };
+document.getElementById('cad').onclick = () => {
+  send([1, 1 | 4, 0, 0x4c, 0, 0, 0, 0, 0]);
+  setTimeout(() => { send([1, 0, 0, 0, 0, 0, 0, 0, 0]); img.focus(); }, 100);
+};
+
+// ---- 마우스 (절대 좌표, 표시된 이미지 영역 기준) ----
+let buttons = 0, pending = null, lastX = 0, lastY = 0;
+function absReport(x, y, wheel) {
+  send([2, buttons, x & 0xff, x >> 8, y & 0xff, y >> 8, wheel & 0xff]);
+}
+function pos(e) {
+  const r = img.getBoundingClientRect();
+  const nx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const ny = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  return [Math.round(nx * 4095), Math.round(ny * 4095)];
+}
+img.addEventListener('mousemove', e => {
+  [lastX, lastY] = pos(e);
+  if (!pending) pending = requestAnimationFrame(() => { pending = null; absReport(lastX, lastY, 0); });
+});
+const BTN = [1, 4, 2, 8, 16]; // 왼쪽, 가운데, 오른쪽, 뒤로, 앞으로
+img.addEventListener('mousedown', e => { img.focus(); buttons |= BTN[e.button] || 0; [lastX, lastY] = pos(e); absReport(lastX, lastY, 0); e.preventDefault(); });
+window.addEventListener('mouseup', e => { buttons &= ~(BTN[e.button] || 0); absReport(lastX, lastY, 0); });
+img.addEventListener('wheel', e => { e.preventDefault(); absReport(lastX, lastY, e.deltaY > 0 ? -1 : 1); }, { passive: false });
+img.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---- 해상도 ----
+async function setRes() {
+  await fetch(`/res?frame=${document.getElementById('res').value}&fps=${document.getElementById('fps').value}`);
+  startStream();
+}
+document.getElementById('res').onchange = setRes;
+document.getElementById('fps').onchange = setRes;
+
+connect();
+startStream();
+img.focus();
+</script>
+</body>
+</html>

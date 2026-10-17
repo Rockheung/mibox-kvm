@@ -20,7 +20,7 @@ public final class Uvc {
         return s.toString();
     }
 
-    static String hex(byte[] b, int off, int len) {
+    public static String hex(byte[] b, int off, int len) {
         StringBuilder s = new StringBuilder();
         for (int k = off; k < off + len && k < b.length; k++) s.append(String.format("%02x", b[k]));
         return s.toString();

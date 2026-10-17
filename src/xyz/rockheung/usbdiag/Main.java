@@ -21,8 +21,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.widget.TextView;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -146,6 +145,23 @@ public final class Main {
      * UVC PROBE/COMMIT 으로 포맷·해상도를 정하고 bulk 엔드포인트에서 프레임 한 장을 받는다.
      * fmt/frame 은 /usb 에 나온 format index, frame index. 기본은 MJPEG 640x480 30fps.
      */
+    /** UVC PROBE/COMMIT. 장치가 정한 값(GET_CUR)을 돌려준다: [2] format, [3] frame, [4..7] interval, [18..21] maxFrame, [22..25] maxPayload */
+    static byte[] uvcCommit(UsbDeviceConnection c, int idx, int fmt, int frame, int fps, StringBuilder info) throws Exception {
+        byte[] probe = new byte[26]; // UVC 1.0 (bcdUVC 0x0100) 의 probe 길이
+        probe[0] = 1; // bmHint: dwFrameInterval 고정
+        probe[2] = (byte) fmt;
+        probe[3] = (byte) frame;
+        put32(probe, 4, 10_000_000L / fps);
+        int r1 = c.controlTransfer(0x21, 0x01, 0x0100, idx, probe, probe.length, 1000); // SET_CUR PROBE
+        byte[] cur = new byte[26];
+        int r2 = c.controlTransfer(0xa1, 0x81, 0x0100, idx, cur, cur.length, 1000);     // GET_CUR PROBE
+        int r3 = c.controlTransfer(0x21, 0x01, 0x0200, idx, cur, cur.length, 1000);     // SET_CUR COMMIT
+        info.append(String.format(Locale.US, "probe set=%d get=%d commit=%d fmt=%d frame=%d interval=%d maxFrame=%d maxPayload=%d",
+                r1, r2, r3, cur[2], cur[3], le32(cur, 4), le32(cur, 18), le32(cur, 22)));
+        if (r3 < 0) throw new Exception("commit failed: " + info);
+        return cur;
+    }
+
     /** benchMs > 0 이면 그동안 받기만 하고 통계를 info 에 남긴 뒤 null 을 돌려준다. */
     static byte[] snap(Context ctx, int fmt, int frame, int fps, int skip, int queue, int reqSize, int benchMs,
                        StringBuilder info) throws Exception {
@@ -164,20 +180,8 @@ public final class Main {
         if (c == null) throw new Exception("openDevice failed");
         try {
             if (!c.claimInterface(vs, true)) throw new Exception("claimInterface failed");
-            int idx = vs.getId();
-            byte[] probe = new byte[26]; // UVC 1.0 (bcdUVC 0x0100) 의 probe 길이
-            probe[0] = 1; // bmHint: dwFrameInterval 고정
-            probe[2] = (byte) fmt;
-            probe[3] = (byte) frame;
-            put32(probe, 4, 10_000_000L / fps);
-            int r1 = c.controlTransfer(0x21, 0x01, 0x0100, idx, probe, probe.length, 1000); // SET_CUR PROBE
-            byte[] cur = new byte[26];
-            int r2 = c.controlTransfer(0xa1, 0x81, 0x0100, idx, cur, cur.length, 1000);     // GET_CUR PROBE
-            int r3 = c.controlTransfer(0x21, 0x01, 0x0200, idx, cur, cur.length, 1000);     // SET_CUR COMMIT
-            long maxFrame = le32(cur, 18), maxPayload = le32(cur, 22);
-            info.append(String.format(Locale.US, "probe set=%d get=%d commit=%d fmt=%d frame=%d interval=%d maxFrame=%d maxPayload=%d ep=%02x/%d",
-                    r1, r2, r3, cur[2], cur[3], le32(cur, 4), maxFrame, maxPayload, ep.getAddress(), ep.getMaxPacketSize()));
-            if (r3 < 0) throw new Exception("commit failed: " + info);
+            byte[] cur = uvcCommit(c, vs.getId(), fmt, frame, fps, info);
+            long maxPayload = le32(cur, 22);
 
             // 동기 bulkTransfer 하나씩으로는 고해상도에서 페이로드를 놓친다. 요청 여러 개를 미리 걸어 둔다.
             // 요청 크기는 정확히 dwMaxPayloadTransferSize 여야 한다. 15360 은 512 의 배수라 페이로드 끝에 short packet 이 없어서,
@@ -289,54 +293,92 @@ public final class Main {
             try {
                 server = new ServerSocket(PORT);
                 while (true) {
-                    try (Socket s = server.accept()) {
-                        s.setSoTimeout(5000);
-                        BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
-                        String line = r.readLine();
-                        String path = line == null ? "" : line.split(" ").length > 1 ? line.split(" ")[1] : "";
-                        String body = null, type = "text/plain; charset=utf-8";
-                        byte[] out = null;
-                        if (path.startsWith("/usb")) { body = usbJson(this); type = "application/json; charset=utf-8"; }
-                        else if (path.startsWith("/perm")) body = requestPerms(this);
-                        else if (path.startsWith("/log")) body = logText();
-                        else if (path.startsWith("/bench")) {
-                            StringBuilder info = new StringBuilder();
-                            try {
-                                snap(this, qp(path, "fmt", 1), qp(path, "frame", 1), qp(path, "fps", 30), 0,
-                                        qp(path, "queue", 8), qp(path, "size", 0), qp(path, "secs", 10) * 1000, info);
-                                body = info + "\n";
-                            } catch (Exception e) {
-                                body = "bench failed: " + e.getMessage() + "\n";
-                            }
-                            log(body.trim());
-                        }
-                        else if (path.startsWith("/snap")) {
-                            StringBuilder info = new StringBuilder();
-                            try {
-                                out = snap(this, qp(path, "fmt", 1), qp(path, "frame", 11), qp(path, "fps", 30), qp(path, "skip", 5),
-                                        qp(path, "queue", 8), qp(path, "size", 0), 0, info);
-                                type = "image/jpeg";
-                                log("snap ok: " + info);
-                            } catch (Exception e) {
-                                body = "snap failed: " + e.getMessage() + "\n";
-                                log(body.trim());
-                            }
-                        }
-                        else if (path.startsWith("/update")) { body = Update.check(this) + "\n"; log(body.trim()); }
-                        else if (path.startsWith("/version"))
-                            body = "versionCode=" + Update.myVersion(this) + " deviceOwner=" + Update.deviceOwner(this) + " repo=" + Update.REPO + "\n";
-                        else body = "/usb /perm /log /snap?fmt=1&frame=11&fps=30 /bench?frame=1&secs=10&queue=8&size=0 /update /version\n";
-                        if (out == null) out = body.getBytes(StandardCharsets.UTF_8);
-                        OutputStream o = s.getOutputStream();
-                        o.write(("HTTP/1.0 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: " + out.length
-                                + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
-                        o.write(out);
-                    } catch (Exception e) {
-                        log("http error: " + e);
-                    }
+                    Socket s = server.accept();
+                    new Thread(() -> handle(s), "http").start(); // ponytail: 연결마다 스레드, 시청자 수가 적다는 전제
                 }
             } catch (Exception e) {
                 log("server died: " + e);
+            }
+        }
+
+        static String readLine(InputStream in) throws java.io.IOException {
+            StringBuilder b = new StringBuilder();
+            for (int c; (c = in.read()) >= 0 && c != '\n'; ) if (c != '\r') b.append((char) c);
+            return b.toString();
+        }
+
+        void handle(Socket s) {
+            try {
+                s.setSoTimeout(5000);
+                InputStream in = s.getInputStream();
+                String line = readLine(in);
+                String path = line.split(" ").length > 1 ? line.split(" ")[1] : "";
+                String wsKey = null;
+                for (String h; !(h = readLine(in)).isEmpty(); )
+                    if (h.toLowerCase(Locale.US).startsWith("sec-websocket-key:")) wsKey = h.substring(18).trim();
+                if (path.startsWith("/ws") && wsKey != null) { Kvm.serveWs(this, s, wsKey); return; }
+                if (path.startsWith("/stream.mjpeg")) { s.setSoTimeout(0); Kvm.serveMjpeg(this, s); return; }
+
+                String body = null, type = "text/plain; charset=utf-8";
+                byte[] out = null;
+                if (path.equals("/") || path.startsWith("/?") || path.startsWith("/index.html")) {
+                    try (InputStream a = getAssets().open("index.html")) { out = Update.readAll(a).getBytes(StandardCharsets.UTF_8); }
+                    type = "text/html; charset=utf-8";
+                }
+                else if (path.startsWith("/usb")) { body = usbJson(this); type = "application/json; charset=utf-8"; }
+                else if (path.startsWith("/perm")) body = requestPerms(this);
+                else if (path.startsWith("/log")) body = logText();
+                else if (path.startsWith("/res")) {
+                    Kvm.wantFrame = qp(path, "frame", Kvm.wantFrame);
+                    Kvm.wantFps = qp(path, "fps", Kvm.wantFps);
+                    body = "frame=" + Kvm.wantFrame + " fps=" + Kvm.wantFps + "\n";
+                }
+                else if (path.startsWith("/hid")) { body = Kvm.hidInfo(this) + "\n"; type = "application/json; charset=utf-8"; }
+                else if (path.startsWith("/status"))
+                    body = "capture=" + Kvm.captureState + " viewers=" + Kvm.viewers + " frame=" + Kvm.wantFrame + " fps=" + Kvm.wantFps + "\n";
+                else if (path.startsWith("/bench")) {
+                    StringBuilder info = new StringBuilder();
+                    try {
+                        if (Kvm.capturing()) throw new Exception("capture is running, close viewers first");
+                        snap(this, qp(path, "fmt", 1), qp(path, "frame", 1), qp(path, "fps", 30), 0,
+                                qp(path, "queue", 8), qp(path, "size", 0), qp(path, "secs", 10) * 1000, info);
+                        body = info + "\n";
+                    } catch (Exception e) {
+                        body = "bench failed: " + e.getMessage() + "\n";
+                    }
+                    log(body.trim());
+                }
+                else if (path.startsWith("/snap")) {
+                    StringBuilder info = new StringBuilder();
+                    try {
+                        if (Kvm.capturing()) { // 스트림이 돌고 있으면 장치를 뺏지 않고 최신 프레임을 준다
+                            long[] seq = {0};
+                            out = Kvm.waitFrame(0, 3000, seq);
+                            if (out == null) throw new Exception("no frame from running capture");
+                        } else {
+                            out = snap(this, qp(path, "fmt", 1), qp(path, "frame", 11), qp(path, "fps", 30), qp(path, "skip", 5),
+                                    qp(path, "queue", 8), qp(path, "size", 0), 0, info);
+                            log("snap ok: " + info);
+                        }
+                        type = "image/jpeg";
+                    } catch (Exception e) {
+                        body = "snap failed: " + e.getMessage() + "\n";
+                        log(body.trim());
+                    }
+                }
+                else if (path.startsWith("/update")) { body = Update.check(this) + "\n"; log(body.trim()); }
+                else if (path.startsWith("/version"))
+                    body = "versionCode=" + Update.myVersion(this) + " deviceOwner=" + Update.deviceOwner(this) + " repo=" + Update.REPO + "\n";
+                else body = "/ (KVM) /stream.mjpeg /ws /res?frame=6&fps=30 /hid /status /usb /perm /log /snap /bench /update /version\n";
+                if (out == null) out = body.getBytes(StandardCharsets.UTF_8);
+                OutputStream o = s.getOutputStream();
+                o.write(("HTTP/1.0 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: " + out.length
+                        + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                o.write(out);
+            } catch (Exception e) {
+                if (!(e instanceof java.net.SocketException)) log("http error: " + e);
+            } finally {
+                try { s.close(); } catch (Exception ignored) {}
             }
         }
 

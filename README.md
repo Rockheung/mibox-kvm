@@ -1,6 +1,6 @@
 # mibox-kvm
 
-Xiaomi Mi Box S(MDZ-22-AB, Android TV 9)에 Sipeed NanoKVM USB를 꽂아 Wi-Fi IP-KVM으로 쓰려는 실험이다. 지금 들어 있는 것은 진단 앱(`USB Diag`) 하나다. Mi Box에서 USB 디스크립터를 읽고, UVC 프레임을 한 장 받고, 스스로 업데이트한다. ADB 없이도 HTTP로 상태를 볼 수 있게 만들었다.
+Xiaomi Mi Box S(MDZ-22-AB, Android TV 9)에 Sipeed NanoKVM USB를 꽂아 Wi-Fi IP-KVM으로 쓰려는 실험이다. 앱(`USB Diag`) 하나가 브라우저 KVM(`http://<mibox>:8080/`)을 제공한다. MJPEG 화면, 키보드, 절대 좌표 마우스를 지원하고, USB 진단 경로와 GitHub Releases OTA도 들어 있다. ADB 없이 HTTP만으로 상태를 볼 수 있다.
 
 ## 확인된 사실
 
@@ -24,6 +24,12 @@ Gradle은 쓰지 않는다. JDK 17, Android build-tools 34, platform 28이 필�
 
 | 경로 | 내용 |
 |---|---|
+| `/` | KVM 웹 페이지. 화면을 클릭하면 키보드와 마우스가 대상 PC로 간다 |
+| `/stream.mjpeg` | `multipart/x-mixed-replace` 영상. 캡처 스레드 하나를 시청자 전부가 나눠 보고, 시청자가 없으면 10초 뒤 멈춘다 |
+| `/ws` | 입력 WebSocket. 바이너리 `[1,mod,0,k1..k6]` 키보드, `[2,btn,xL,xH,yL,yH,wheel]` 절대 마우스(0..4095), `[3,btn,dx,dy,wheel]` 상대 마우스. 서버가 CH9329 패킷으로 감싸 CDC로 보낸다 |
+| `/res?frame=6&fps=30` | 캡처 해상도(frame index)와 fps. 기본 1280×720 30fps |
+| `/hid` | CH9329 `GET_INFO`: 칩 버전, 대상 PC USB 연결 여부, Num/Caps/Scroll Lock |
+| `/status` | 캡처 상태, 시청자 수 |
 | `/usb` | USB 장치, 인터페이스, 엔드포인트. 권한이 있으면 raw 디스크립터와 UVC 포맷/프레임 파싱 결과 |
 | `/perm` | 권한 없는 장치마다 TV에 권한 대화상자를 띄운다 |
 | `/snap?fmt=1&frame=11&fps=30` | UVC PROBE/COMMIT 후 MJPEG 한 장(`image/jpeg`). frame은 `/usb`의 frame index |
@@ -44,7 +50,7 @@ Gradle은 쓰지 않는다. JDK 17, Android build-tools 34, platform 28이 필�
 
 ## 다음 할 일
 
-연속 MJPEG 스트림, CDC 시리얼 입력 중계, NanoKVM-USB 웹 UI 포팅(시리얼 계층은 WebSocket으로, 카메라는 MJPEG `<img>`로 바꾼다), 상시 운용 검증.
+붙여넣기(문자열 입력), 상대 마우스 모드, 대상 화면 비율이 16:9가 아닐 때의 좌표 보정, 인증, 상시 운용 검증. 필요하면 NanoKVM-USB 웹 UI를 포팅한다(GPL-3.0).
 
 ## License
 

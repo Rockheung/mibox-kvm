@@ -8,7 +8,7 @@ JAR="$HOME/opt/android-sdk/platforms/android-28/android.jar"
 
 rm -rf build && mkdir -p build/classes build/test build/dex
 "$BT/aapt2" compile --dir res -o build/res.zip
-"$BT/aapt2" link build/res.zip -I "$JAR" --manifest AndroidManifest.xml -o build/unsigned.apk
+"$BT/aapt2" link build/res.zip -I "$JAR" --manifest AndroidManifest.xml -A assets -o build/unsigned.apk
 
 javac -Xlint:-options --release 8 -classpath "$JAR" -d build/classes $(find src -name '*.java')
 javac -cp build/classes -d build/test test/UvcCheck.java

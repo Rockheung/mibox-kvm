@@ -1,10 +1,12 @@
+import xyz.rockheung.usbdiag.Ch9329;
 import xyz.rockheung.usbdiag.Uvc;
+import xyz.rockheung.usbdiag.Ws;
 
 /** 호스트에서 도는 파서 자가검사: java -cp build/test:build/classes UvcCheck */
 public class UvcCheck {
     static byte[] b(int... v) { byte[] o = new byte[v.length]; for (int i = 0; i < v.length; i++) o[i] = (byte) v[i]; return o; }
 
-    public static void main(String[] a) {
+    public static void main(String[] a) throws Exception {
         java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
         o.writeBytes(b(18, 1, 0x00, 0x02, 0xef, 2, 1, 64, 0x5e, 0x34, 0x09, 0x21, 0x00, 0x01, 1, 2, 3, 1)); // device 345e:2109
         o.writeBytes(b(9, 2, 0, 0, 2, 1, 0, 0x80, 250));                    // config, 500mA
@@ -41,6 +43,17 @@ public class UvcCheck {
         if (Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 3, 4))) throw new AssertionError("jpeg truncated");
         byte[] padded = new byte[300]; padded[0] = (byte) 0xff; padded[1] = (byte) 0xd8; padded[100] = (byte) 0xff; padded[101] = (byte) 0xd9;
         if (!Uvc.isCompleteJpeg(padded)) throw new AssertionError("jpeg long zero padding");
+        // CH9329: GET_INFO = 57 AB 00 01 00 03
+        if (!Uvc.hex(Ch9329.packet(Ch9329.GET_INFO, new byte[0]), 0, 6).equals("57ab00010003")) throw new AssertionError("ch9329 packet");
+        byte[] rsp = Ch9329.packet(0x81, b(0x31, 1, 0x02, 0, 0, 0, 0, 0));
+        byte[] noisy = new byte[rsp.length + 3]; noisy[0] = 0x12; System.arraycopy(rsp, 0, noisy, 3, rsp.length);
+        if (!Ch9329.info(Ch9329.parse(noisy, noisy.length)).contains("\"chip\":\"V1.1\",\"targetConnected\":true,\"numLock\":false,\"capsLock\":true"))
+            throw new AssertionError("ch9329 info " + Ch9329.info(Ch9329.parse(noisy, noisy.length)));
+        if (Ch9329.parse(rsp, rsp.length - 1) != null) throw new AssertionError("ch9329 partial");
+        // RFC 6455 예시
+        if (!Ws.accept("dGhlIHNhbXBsZSBub25jZQ==").equals("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")) throw new AssertionError("ws accept");
+        Ws.Msg m = Ws.read(new java.io.ByteArrayInputStream(b(0x82, 0x83, 1, 2, 3, 4, 1 ^ 9, 2 ^ 8, 3 ^ 7)));
+        if (m.opcode != 2 || !java.util.Arrays.equals(m.data, b(9, 8, 7))) throw new AssertionError("ws read");
         System.out.println("OK");
     }
 
