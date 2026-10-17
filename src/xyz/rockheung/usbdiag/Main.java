@@ -146,9 +146,9 @@ public final class Main {
      * UVC PROBE/COMMIT 으로 포맷·해상도를 정하고 bulk 엔드포인트에서 프레임 한 장을 받는다.
      * fmt/frame 은 /usb 에 나온 format index, frame index. 기본은 MJPEG 640x480 30fps.
      */
-    static final int QUEUE = 8;
-
-    static byte[] snap(Context ctx, int fmt, int frame, int fps, int skip, StringBuilder info) throws Exception {
+    /** benchMs > 0 이면 그동안 받기만 하고 통계를 info 에 남긴 뒤 null 을 돌려준다. */
+    static byte[] snap(Context ctx, int fmt, int frame, int fps, int skip, int queue, int reqSize, int benchMs,
+                       StringBuilder info) throws Exception {
         UsbManager um = (UsbManager) ctx.getSystemService(Context.USB_SERVICE);
         UsbDevice dev = null;
         UsbInterface vs = null;
@@ -180,9 +180,9 @@ public final class Main {
             if (r3 < 0) throw new Exception("commit failed: " + info);
 
             // 동기 bulkTransfer 하나씩으로는 고해상도에서 페이로드를 놓친다. 요청 여러 개를 미리 걸어 둔다.
-            int size = (int) Math.max(16384, Math.min(maxPayload, 4 << 20));
-            UsbRequest[] reqs = new UsbRequest[QUEUE];
-            for (int k = 0; k < QUEUE; k++) {
+            int size = reqSize > 0 ? reqSize : (int) Math.max(16384, Math.min(maxPayload, 4 << 20));
+            UsbRequest[] reqs = new UsbRequest[queue];
+            for (int k = 0; k < queue; k++) {
                 reqs[k] = new UsbRequest();
                 reqs[k].initialize(c, ep);
                 ByteBuffer bb = ByteBuffer.allocate(size);
@@ -193,8 +193,12 @@ public final class Main {
                 byte[] buf = new byte[size];
                 Uvc.Assembler as = new Uvc.Assembler();
                 long t0 = System.currentTimeMillis(), tFirst = 0, bytes = 0;
-                int good = 0, truncated = 0;
-                while (System.currentTimeMillis() - t0 < 5000) {
+                int good = 0, truncated = 0, maxN = 0;
+                long goodBytes = 0;
+                int[] hist = new int[5]; // 페이로드 크기: <1K <4K <16K <64K 그 이상
+                String truncTail = null;
+                long limit = benchMs > 0 ? benchMs : 5000;
+                while (System.currentTimeMillis() - t0 < limit) {
                     UsbRequest r;
                     try { r = c.requestWait(1000); } catch (java.util.concurrent.TimeoutException e) { continue; }
                     ByteBuffer bb = (ByteBuffer) r.getClientData();
@@ -204,10 +208,17 @@ public final class Main {
                     bb.clear();
                     r.queue(bb);
                     bytes += n;
+                    maxN = Math.max(maxN, n);
+                    hist[n < 1024 ? 0 : n < 4096 ? 1 : n < 16384 ? 2 : n < 65536 ? 3 : 4]++;
                     byte[] f = as.feed(buf, n);
                     if (f == null) continue;
-                    if (!Uvc.isCompleteJpeg(f)) { truncated++; continue; }
+                    if (!Uvc.isCompleteJpeg(f)) {
+                        if (truncated++ == 0) truncTail = f.length + "B tail=" + Uvc.hex(f, Math.max(0, f.length - 32), 32);
+                        continue;
+                    }
+                    goodBytes += f.length;
                     if (good++ == 0) tFirst = System.currentTimeMillis();
+                    if (benchMs > 0) continue;
                     if (good > skip) {
                         long span = System.currentTimeMillis() - tFirst;
                         info.append(String.format(Locale.US, " | %d bytes jpeg after %dms, good=%d truncated=%d payloads=%d errors=%d rx=%d, %.1f fps",
@@ -215,6 +226,13 @@ public final class Main {
                                 span > 0 ? (good - 1) * 1000.0 / span : 0));
                         return f;
                     }
+                }
+                if (benchMs > 0) {
+                    double secs = (System.currentTimeMillis() - t0) / 1000.0;
+                    info.append(String.format(Locale.US, " | bench %.1fs queue=%d req=%d: rx=%.2fMB/s payloads=%d (<1K %d, <4K %d, <16K %d, <64K %d, more %d, max %d) errors=%d good=%d (%.1f fps, avg %dB) truncated=%d first=%s",
+                            secs, queue, size, bytes / secs / 1e6, as.payloads, hist[0], hist[1], hist[2], hist[3], hist[4], maxN,
+                            as.errors, good, good / secs, good > 0 ? goodBytes / good : 0, truncated, truncTail));
+                    return null;
                 }
                 throw new Exception("timeout: good=" + good + " truncated=" + truncated + " payloads=" + as.payloads
                         + " errors=" + as.errors + " rx=" + bytes + " | " + info);
@@ -279,10 +297,22 @@ public final class Main {
                         if (path.startsWith("/usb")) { body = usbJson(this); type = "application/json; charset=utf-8"; }
                         else if (path.startsWith("/perm")) body = requestPerms(this);
                         else if (path.startsWith("/log")) body = logText();
+                        else if (path.startsWith("/bench")) {
+                            StringBuilder info = new StringBuilder();
+                            try {
+                                snap(this, qp(path, "fmt", 1), qp(path, "frame", 1), qp(path, "fps", 30), 0,
+                                        qp(path, "queue", 8), qp(path, "size", 0), qp(path, "secs", 10) * 1000, info);
+                                body = info + "\n";
+                            } catch (Exception e) {
+                                body = "bench failed: " + e.getMessage() + "\n";
+                            }
+                            log(body.trim());
+                        }
                         else if (path.startsWith("/snap")) {
                             StringBuilder info = new StringBuilder();
                             try {
-                                out = snap(this, qp(path, "fmt", 1), qp(path, "frame", 11), qp(path, "fps", 30), qp(path, "skip", 5), info);
+                                out = snap(this, qp(path, "fmt", 1), qp(path, "frame", 11), qp(path, "fps", 30), qp(path, "skip", 5),
+                                        qp(path, "queue", 8), qp(path, "size", 0), 0, info);
                                 type = "image/jpeg";
                                 log("snap ok: " + info);
                             } catch (Exception e) {
@@ -293,7 +323,7 @@ public final class Main {
                         else if (path.startsWith("/update")) { body = Update.check(this) + "\n"; log(body.trim()); }
                         else if (path.startsWith("/version"))
                             body = "versionCode=" + Update.myVersion(this) + " deviceOwner=" + Update.deviceOwner(this) + " repo=" + Update.REPO + "\n";
-                        else body = "/usb /perm /log /snap?fmt=1&frame=11&fps=30 /update /version\n";
+                        else body = "/usb /perm /log /snap?fmt=1&frame=11&fps=30 /bench?frame=1&secs=10&queue=8&size=0 /update /version\n";
                         if (out == null) out = body.getBytes(StandardCharsets.UTF_8);
                         OutputStream o = s.getOutputStream();
                         o.write(("HTTP/1.0 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: " + out.length

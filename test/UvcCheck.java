@@ -39,6 +39,8 @@ public class UvcCheck {
         if (!Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 0xff, 0xd9))) throw new AssertionError("jpeg ok");
         if (!Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 0xff, 0xd9, 0, 0))) throw new AssertionError("jpeg padded");
         if (Uvc.isCompleteJpeg(b(0xff, 0xd8, 1, 2, 3, 4))) throw new AssertionError("jpeg truncated");
+        byte[] padded = new byte[300]; padded[0] = (byte) 0xff; padded[1] = (byte) 0xd8; padded[100] = (byte) 0xff; padded[101] = (byte) 0xd9;
+        if (!Uvc.isCompleteJpeg(padded)) throw new AssertionError("jpeg long zero padding");
         System.out.println("OK");
     }
 

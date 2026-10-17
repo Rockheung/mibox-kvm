@@ -27,6 +27,7 @@ Gradle은 쓰지 않는다. JDK 17, Android build-tools 34, platform 28이 필�
 | `/usb` | USB 장치, 인터페이스, 엔드포인트. 권한이 있으면 raw 디스크립터와 UVC 포맷/프레임 파싱 결과 |
 | `/perm` | 권한 없는 장치마다 TV에 권한 대화상자를 띄운다 |
 | `/snap?fmt=1&frame=11&fps=30` | UVC PROBE/COMMIT 후 MJPEG 한 장(`image/jpeg`). frame은 `/usb`의 frame index |
+| `/bench?frame=1&secs=10&queue=8&size=0` | 일정 시간 받기만 하면서 처리량, 페이로드 크기 분포, 완전한/잘린 프레임 수, 첫 잘린 프레임의 꼬리를 보고한다. size=0이면 dwMaxPayloadTransferSize를 쓴다 |
 | `/log` | attach/detach, 권한, OTA 이벤트 |
 | `/update` | OTA 즉시 확인 |
 | `/version` | versionCode, device owner 여부 |

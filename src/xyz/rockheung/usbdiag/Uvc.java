@@ -114,12 +114,12 @@ public final class Uvc {
         }
     }
 
-    /** SOI(FFD8)로 시작하고 끝 16바이트 안에 EOI(FFD9)가 있으면 완전한 JPEG 로 본다. 뒤에 패딩을 붙이는 칩이 있다. */
+    /** SOI(FFD8)로 시작하고, 끝의 00 패딩을 건너뛴 자리에 EOI(FFD9)가 있으면 완전한 JPEG 로 본다. */
     public static boolean isCompleteJpeg(byte[] f) {
         if (f.length < 4 || u8(f, 0) != 0xff || u8(f, 1) != 0xd8) return false;
-        for (int i = f.length - 2; i >= Math.max(2, f.length - 16); i--)
-            if (u8(f, i) == 0xff && u8(f, i + 1) == 0xd9) return true;
-        return false;
+        int i = f.length - 1;
+        while (i > 3 && f[i] == 0) i--;
+        return u8(f, i - 1) == 0xff && u8(f, i) == 0xd9;
     }
 
     /** UVC VideoStreaming class-specific 디스크립터 */
