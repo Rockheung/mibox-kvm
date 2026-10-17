@@ -85,14 +85,6 @@ public final class Uvc {
         private boolean started;
         public int payloads, errors;
 
-        /**
-         * 이전 전송이 요청 버퍼를 꽉 채워 끝났으면 같은 페이로드가 이어진다(bulk 규칙). 헤더 없이 붙인다.
-         * 이 칩은 dwMaxPayloadTransferSize 를 넘는 페이로드(프레임 한 장)를 보내므로 꼭 필요하다.
-         */
-        public void feedContinuation(byte[] buf, int n) {
-            if (started) out.write(buf, 0, n);
-        }
-
         /** 완성된 프레임이 생기면 반환, 아니면 null */
         public byte[] feed(byte[] buf, int n) {
             if (n < 2) return null;

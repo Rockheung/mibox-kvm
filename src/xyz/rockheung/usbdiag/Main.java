@@ -180,7 +180,9 @@ public final class Main {
             if (r3 < 0) throw new Exception("commit failed: " + info);
 
             // 동기 bulkTransfer 하나씩으로는 고해상도에서 페이로드를 놓친다. 요청 여러 개를 미리 걸어 둔다.
-            int size = reqSize > 0 ? reqSize : 65536; // 칩이 maxPayload(15360)를 무시하고 프레임 통째로 보낸다. 넘치면 이어 붙인다
+            // 요청 크기는 정확히 dwMaxPayloadTransferSize 여야 한다. 15360 은 512 의 배수라 페이로드 끝에 short packet 이 없어서,
+            // 더 크게 잡으면 여러 페이로드가 한 전송으로 합쳐지고 중간 헤더(12B)가 JPEG 안에 섞인다.
+            int size = reqSize > 0 ? reqSize : (int) Math.max(512, Math.min(maxPayload, 4 << 20));
             UsbRequest[] reqs = new UsbRequest[queue];
             for (int k = 0; k < queue; k++) {
                 reqs[k] = new UsbRequest();
@@ -194,7 +196,6 @@ public final class Main {
                 Uvc.Assembler as = new Uvc.Assembler();
                 long t0 = System.currentTimeMillis(), tFirst = 0, bytes = 0;
                 int good = 0, truncated = 0, maxN = 0;
-                boolean full = false; // 직전 전송이 버퍼를 꽉 채웠는가
                 long goodBytes = 0;
                 int[] hist = new int[5]; // 페이로드 크기: <1K <4K <16K <64K 그 이상
                 String truncTail = null;
@@ -209,9 +210,6 @@ public final class Main {
                     bb.clear();
                     r.queue(bb);
                     bytes += n;
-                    boolean cont = full;
-                    full = n == size;
-                    if (cont) { as.feedContinuation(buf, n); continue; }
                     maxN = Math.max(maxN, n);
                     hist[n < 1024 ? 0 : n < 4096 ? 1 : n < 16384 ? 2 : n < 65536 ? 3 : 4]++;
                     byte[] f = as.feed(buf, n);
