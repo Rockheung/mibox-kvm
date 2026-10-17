@@ -26,7 +26,7 @@ final class Kvm {
 
     static final Object lock = new Object();
     static byte[] latest;
-    static long seq;
+    static long seq, latestAt;
     static int viewers; // lock 으로 보호
     static volatile int wantFrame = 6, wantFps = 30; // 기본 1280x720 30fps
     static volatile String captureState = "stopped";
@@ -109,6 +109,7 @@ final class Kvm {
                         if (f == null || !Uvc.isCompleteJpeg(f)) continue;
                         synchronized (lock) {
                             latest = f;
+                            latestAt = System.currentTimeMillis();
                             seq++;
                             lock.notifyAll();
                         }
@@ -136,10 +137,19 @@ final class Kvm {
             o.write(("HTTP/1.0 200 OK\r\nCache-Control: no-store\r\nConnection: close\r\n"
                     + "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             long[] last = {0};
-            synchronized (lock) { last[0] = Math.max(0, seq - 1); } // 있으면 직전 프레임부터 바로 보여 준다
+            synchronized (lock) { // 막 받은 프레임이면 바로 보여 주고, 낡았으면(캡처가 죽어 있으면) 보내지 않는다
+                last[0] = System.currentTimeMillis() - latestAt < 1000 ? Math.max(0, seq - 1) : seq;
+            }
+            int misses = 0;
             while (true) {
                 byte[] f = waitFrame(last[0], 5000, last);
-                if (f == null) { ensureCapture(ctx); continue; }
+                if (f == null) {
+                    // 10초 동안 새 프레임이 없으면 닫는다. 브라우저 <img> 가 오류를 받고 다시 붙는다(멈춘 화면 방지)
+                    if (++misses >= 2) return;
+                    ensureCapture(ctx);
+                    continue;
+                }
+                misses = 0;
                 o.write(("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + f.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                 o.write(f);
                 o.write("\r\n".getBytes(StandardCharsets.US_ASCII));

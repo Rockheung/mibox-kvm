@@ -145,6 +145,34 @@ public final class Main {
      * UVC PROBE/COMMIT 으로 포맷·해상도를 정하고 bulk 엔드포인트에서 프레임 한 장을 받는다.
      * fmt/frame 은 /usb 에 나온 format index, frame index. 기본은 MJPEG 640x480 30fps.
      */
+    /**
+     * 부팅 때 이미 꽂혀 있던 장치에는 "항상 허용" 연결이 동작하지 않아 USB 권한이 없다.
+     * ADB 설정을 잠깐 켰다 끄면 gadget 이 PHY 를 가져갔다 돌려주면서 호스트 장치가 다시 붙고,
+     * 그때는 기본 앱 연결이 동작해 권한이 붙는다. WRITE_SECURE_SETTINGS 는 adb 로 한 번 넣어 둔다:
+     *   adb shell pm grant xyz.rockheung.usbdiag android.permission.WRITE_SECURE_SETTINGS
+     */
+    static String reenumerate(Context ctx, String why) {
+        UsbManager um = (UsbManager) ctx.getSystemService(Context.USB_SERVICE);
+        int missing = 0;
+        for (UsbDevice d : um.getDeviceList().values()) if (!um.hasPermission(d)) missing++;
+        if (missing == 0) return "reenum(" + why + "): all devices permitted";
+        android.content.ContentResolver cr = ctx.getContentResolver();
+        if (android.provider.Settings.Global.getInt(cr, android.provider.Settings.Global.ADB_ENABLED, 0) != 0)
+            return "reenum(" + why + "): adb is enabled, USB host is unusable anyway; skipped";
+        if (ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            return "reenum(" + why + "): " + missing + " device(s) without permission, and WRITE_SECURE_SETTINGS not granted";
+        try {
+            android.provider.Settings.Global.putInt(cr, android.provider.Settings.Global.ADB_ENABLED, 1);
+            Thread.sleep(3000);
+        } catch (InterruptedException ignored) {
+        } finally {
+            android.provider.Settings.Global.putInt(cr, android.provider.Settings.Global.ADB_ENABLED, 0);
+        }
+        String r = "reenum(" + why + "): toggled adb for " + missing + " device(s) without permission";
+        log(r);
+        return r;
+    }
+
     /** UVC PROBE/COMMIT. 장치가 정한 값(GET_CUR)을 돌려준다: [2] format, [3] frame, [4..7] interval, [18..21] maxFrame, [22..25] maxPayload */
     static byte[] uvcCommit(UsbDeviceConnection c, int idx, int fmt, int frame, int fps, StringBuilder info) throws Exception {
         byte[] probe = new byte[26]; // UVC 1.0 (bcdUVC 0x0100) 의 probe 길이
@@ -279,6 +307,12 @@ public final class Main {
             new Thread(this::serve, "http").start();
             new Thread(() -> {
                 try {
+                    Thread.sleep(15_000); // 부팅 직후 장치 열거가 끝나기를 기다린다
+                    log(reenumerate(this, "startup"));
+                } catch (InterruptedException ignored) {}
+            }, "reenum").start();
+            new Thread(() -> {
+                try {
                     Thread.sleep(2 * 60_000L); // 부팅 직후 네트워크가 잡힐 시간을 준다
                     while (true) {
                         log(Update.check(this));
@@ -333,6 +367,7 @@ public final class Main {
                     Kvm.wantFps = qp(path, "fps", Kvm.wantFps);
                     body = "frame=" + Kvm.wantFrame + " fps=" + Kvm.wantFps + "\n";
                 }
+                else if (path.startsWith("/reenum")) body = reenumerate(this, "manual") + "\n";
                 else if (path.startsWith("/hid")) { body = Kvm.hidInfo(this) + "\n"; type = "application/json; charset=utf-8"; }
                 else if (path.startsWith("/status"))
                     body = "capture=" + Kvm.captureState + " viewers=" + Kvm.viewers + " frame=" + Kvm.wantFrame + " fps=" + Kvm.wantFps + "\n";

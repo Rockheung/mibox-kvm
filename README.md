@@ -30,6 +30,7 @@ Gradle은 쓰지 않는다. JDK 17, Android build-tools 34, platform 28이 필�
 | `/res?frame=6&fps=30` | 캡처 해상도(frame index)와 fps. 기본 1280×720 30fps |
 | `/hid` | CH9329 `GET_INFO`: 칩 버전, 대상 PC USB 연결 여부, Num/Caps/Scroll Lock |
 | `/status` | 캡처 상태, 시청자 수 |
+| `/reenum` | 권한 없는 USB 장치가 있으면 ADB 설정을 잠깐 켰다 꺼서 장치를 다시 붙인다(아래 "재부팅 복구") |
 | `/usb` | USB 장치, 인터페이스, 엔드포인트. 권한이 있으면 raw 디스크립터와 UVC 포맷/프레임 파싱 결과 |
 | `/perm` | 권한 없는 장치마다 TV에 권한 대화상자를 띄운다 |
 | `/snap?fmt=1&frame=11&fps=30` | UVC PROBE/COMMIT 후 MJPEG 한 장(`image/jpeg`). frame은 `/usb`의 frame index |
@@ -39,6 +40,16 @@ Gradle은 쓰지 않는다. JDK 17, Android build-tools 34, platform 28이 필�
 | `/version` | versionCode, device owner 여부 |
 
 인증이 없다. LAN이나 VPN 안에서만 열어 둘 것.
+
+## 재부팅 복구
+
+부팅 때 이미 꽂혀 있던 장치에는 "항상 허용"(기본 앱 연결)이 동작하지 않아서 USB 권한이 없다. 서비스는 부팅 15초 뒤에 권한 없는 장치가 있는지 보고, 있으면 ADB 설정을 3초 동안 켰다 끈다. gadget이 PHY를 가져갔다 돌려주면서 장치가 다시 붙고, 그때 기본 앱 연결이 동작해 권한이 붙는다. 이를 위해 한 번만 다음 명령을 실행한다.
+
+```sh
+adb shell pm grant xyz.rockheung.usbdiag android.permission.WRITE_SECURE_SETTINGS
+```
+
+USB 장치를 처음 꽂을 때 "USB Diag로 열기"에서 "항상"을 골라 둬야 한다.
 
 ## OTA
 
